@@ -145,8 +145,11 @@ evidence drove the match* (which features/modality dominated). Cheap adds once t
 
 - **Python + PyTorch**; `torchgeo` / `rasterio` for the Sentinel-1 GeoTIFF + ancillary-raster
   handling and tiling; xView3 reference scoring code (fork) for the metric.
-- **Single GPU** (V100 / RTX 3090 / 4090-class) is sufficient for both stages (per the xView3
-  reference setup); grants would fund cloud GPU if local is insufficient. Chips in Stage 2 are small.
+- **Compute: RunPod (cloud GPU)** — the founder uses RunPod routinely with credentials/setup in
+  place. A **single GPU** (V100 / RTX 3090 / 4090 / A100-class) is sufficient for both stages (per
+  the xView3 reference setup); chips in Stage 2 are small. Workflow: spin up a pod, stage the
+  dataset to pod storage, train, pull checkpoints + metrics back down. Keep training offline/on-pod;
+  inference integrates with the live bus locally.
 - Repo layout (proposed): `src/` (data, model, train, eval, infer), `docs/`, `configs/`;
   `data/`, `runs/`, `checkpoints/`, `*.tif` are git-ignored.
 
