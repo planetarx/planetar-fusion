@@ -1,0 +1,11 @@
+*.db
+__pycache__/
+*.pyc
+.venv/
+data/
+runs/
+checkpoints/
+*.tif
+*.tiff
+.claude/settings.local.json
+.playwright-mcp/
