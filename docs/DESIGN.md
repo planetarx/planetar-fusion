@@ -63,8 +63,14 @@ DIU + Global Fishing Watch (NeurIPS 2022; arXiv 2206.00897). Register at
   public 150 (leaderboard), holdout 237 (withheld). **~2 TB public.**
 - **Benchmark:** aggregate `MR` = f(detection F1 `F1_D`, close-to-shore F1 `F1_S`, `is_vessel` F1,
   `is_fishing` F1, length aggregate-percent-error); reference + 1st–5th scores published.
-- **License:** DIU "free and open" for academic/industrial/**commercial**/open-source use (unlike
-  GFW's CC BY-NC). Reference code MIT/Apache.
+- **License (corrected 2026-07-26 from the actual download page):** the **dataset is CC BY-NC-SA
+  4.0 — NON-commercial, ShareAlike, attribution** (the *reference code* is separately MIT/Apache).
+  Consequence: xView3 is fine for **non-commercial R&D, the benchmark, and the demo**, but a model
+  trained on it is **NC/SA-encumbered — a research/benchmark/demo artifact that cannot be released as
+  part of the GPLv3 model** (ShareAlike is incompatible with GPLv3; NonCommercial bars the paid-
+  services use — planetar is GPLv3 + paid services, DECISIONS D2a). The **released** detector
+  retrains on clean data (Stage 2: Copernicus Sentinel-1 + Marine Cadastre public-domain AIS). Do
+  not redistribute the data (their terms forbid it anyway).
 - **Compute reference:** challenge baseline = **1× V100, 60 GB RAM**; 1st place ~63 h train. One GPU.
 - **Practical:** don't pull all ~2 TB — work from **validation (50) + a train subset**; stand up the
   dataloader on `torchgeo`'s "xView3 tiny" first; **mirror our copy on download** (hosted on
@@ -159,7 +165,12 @@ evidence drove the match* (which features/modality dominated). Cheap adds once t
 
 - Not the full 6-modality model — EO / acoustic / RF / text are *later* (the CH13 thesis path), not v0.
 - Not a SAR-only "dark classifier" — darkness is detection − AIS at deployment (§3, honesty).
-- No GFW-derived data in any commercial-path model (CC BY-NC); xView3 + Marine Cadastre are clean.
+- **Licensing discipline (planetar = GPLv3 + paid services, DECISIONS D2a):** xView3 (CC BY-NC-SA)
+  and GFW (CC BY-NC) are non-commercial + ShareAlike — usable for the research v0, benchmark, and
+  demo, but **never released as part of the GPLv3 model** (SA↔GPLv3 incompatible; NC bars the paid-
+  services use). Only **Copernicus Sentinel-1 + Marine Cadastre AIS (public domain)** can back a
+  **released GPLv3** detector → the Stage-2 self-collected pipeline is that path. The xView3-trained
+  Stage-1 weights power the **benchmark + demo only**.
 - Not real-time training — inference integrates with the live bus; training is offline.
 - No new SAR *detector* research beyond what hits a credible xView3 score — the novelty is the
   Stage-2 learned *association*, not another detector architecture.
