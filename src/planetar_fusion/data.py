@@ -47,6 +47,29 @@ def gaussian_splat(shape, points, sigma=2.0):
     return hm
 
 
+def tile_origins(size, tile, stride):
+    """Origins of `tile`-wide windows on a `stride` grid covering [0, size),
+    plus a final window flush with the far edge so no strip is left uncovered
+    (the dataset and full-scene inference share this grid)."""
+    if size <= tile:
+        return [0]
+    origins = list(range(0, size - tile + 1, stride))
+    if origins[-1] != size - tile:
+        origins.append(size - tile)
+    return origins
+
+
+def read_window(scene_dir, channels, r0, c0, tile):
+    """Stacked, per-channel z-scored window → FloatTensor[C,tile,tile].
+    Shared by XView3Dataset and infer.infer_scene so both see identical input."""
+    win = rasterio.windows.Window(c0, r0, tile, tile)
+    chans = [_read(Path(scene_dir) / f"{ch}.tif", win) for ch in channels]
+    img = torch.from_numpy(np.stack(chans)).float()
+    mean = img.mean(dim=(1, 2), keepdim=True)
+    std = img.std(dim=(1, 2), keepdim=True)
+    return (img - mean) / (std + 1e-6)
+
+
 def _read(path, window=None):
     with rasterio.open(path) as ds:
         a = ds.read(1, window=window).astype("float32")
@@ -79,8 +102,8 @@ class XView3Dataset(Dataset):
         for scene_id in self.labels["scene_id"].unique():
             with rasterio.open(self.root / scene_id / f"{self.channels[0]}.tif") as ds:
                 H, W = ds.height, ds.width
-            for r0 in range(0, max(1, H - self.tile + 1), self.stride):
-                for c0 in range(0, max(1, W - self.tile + 1), self.stride):
+            for r0 in tile_origins(H, self.tile, self.stride):
+                for c0 in tile_origins(W, self.tile, self.stride):
                     self.index.append((scene_id, r0, c0))
 
     def __len__(self):
@@ -88,12 +111,7 @@ class XView3Dataset(Dataset):
 
     def read_tile(self, scene_id, r0, c0):
         """Stacked, z-scored channels for one window → FloatTensor[C,tile,tile]."""
-        win = rasterio.windows.Window(c0, r0, self.tile, self.tile)
-        chans = [_read(self.root / scene_id / f"{ch}.tif", win) for ch in self.channels]
-        img = torch.from_numpy(np.stack(chans)).float()
-        mean = img.mean(dim=(1, 2), keepdim=True)
-        std = img.std(dim=(1, 2), keepdim=True)
-        return (img - mean) / (std + 1e-6)
+        return read_window(self.root / scene_id, self.channels, r0, c0, self.tile)
 
     def targets(self, scene_id, r0, c0):
         d = self.labels[self.labels.scene_id == scene_id]
