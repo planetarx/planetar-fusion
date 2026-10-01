@@ -6,7 +6,7 @@ SAR↔AIS association from AIS-on co-occurrence (free labels) and applies it to 
 (`../planetar/docs/recenter-learned-fusion.md`); this repo makes the core idea real on the two
 modalities we actually run — Sentinel-1 SAR + AIS — then stages the rest.
 
-> **Status: DESIGN APPROVED 2026-07-26 — not yet built.** Read [`docs/DESIGN.md`](docs/DESIGN.md).
+> **Status: Stage 1 code built and tested (Tasks 1–7, 2026-10-01); awaiting the xView3 download (Task 0) and the first RunPod training run (Task 8).** Design: [`docs/DESIGN.md`](docs/DESIGN.md). Plan: [`docs/plans/2026-07-26-stage1-xview3-detector.md`](docs/plans/2026-07-26-stage1-xview3-detector.md).
 
 ## The v0, in two stages (single GPU throughout)
 
@@ -22,6 +22,23 @@ modalities we actually run — Sentinel-1 SAR + AIS — then stages the rest.
 | Path | State |
 |---|---|
 | [`docs/DESIGN.md`](docs/DESIGN.md) | ✅ The full v0 design (data, architecture, training, eval, integration) |
+| `src/planetar_fusion/data.py` | ✅ `XView3Dataset` (tiling on a shared grid, 5-channel z-scored stacks) + `gaussian_splat` CenterNet targets |
+| `src/planetar_fusion/model.py` | ✅ `CenterNetSAR` — U-Net, four full-resolution heads (heatmap, log-length, is_vessel, is_fishing) |
+| `src/planetar_fusion/losses.py` | ✅ Penalty-reduced focal + L1(log1p length) + BCE at GT centres; proven by an overfit-one-batch test |
+| `src/planetar_fusion/train.py`, `configs/stage1.yaml` | ✅ Config-driven loop → per-epoch checkpoints + `runs/metrics.jsonl` |
+| `src/planetar_fusion/infer.py` | ✅ Full-scene tile → peaks → global NMS → xView3 CSV; recovers the synthetic fixture's targets |
+| `src/planetar_fusion/eval.py` + `vendor/xview3-reference` | ✅ The leaderboard `MR` via the vendored reference scorer (BSD-3; `git submodule update --init`) |
+| `tests/` | ✅ 18 tests; `tests/conftest.py` writes a synthetic scene in the xView3 layout (torchgeo has no xView3 loader) |
+| `scripts/runpod_setup.sh` | ⚠️ Written, not yet run on a pod |
+| **Task 0 — xView3 data** | ❌ Human prerequisite: register at iuu.xview.us, download validation (50 scenes, ~123 GB) + labels to `data/xview3/` |
+| **Task 8 — RunPod run + real `MR`** | ❌ Blocked on Task 0 |
+| **Task 9 — `planetar-sat --detector learned`** | ❌ Needs a channel-set decision: planetar-sat scenes are single-pol GRD intensity, not the 5-channel xView3 stack |
+
+```
+uv venv --python 3.11 .venv && uv pip install --python .venv/bin/python -e ".[dev]"
+git submodule update --init
+.venv/bin/pytest -q
+```
 
 ## What's coming (Stage 1 build)
 
