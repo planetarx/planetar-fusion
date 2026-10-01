@@ -9,3 +9,4 @@ checkpoints/
 *.tiff
 .claude/settings.local.json
 .playwright-mcp/
+*.egg-info/
