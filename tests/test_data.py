@@ -1,0 +1,64 @@
+"""Task 2 — CenterNet heatmap targets and the xView3 dataset."""
+import torch
+
+from planetar_fusion.data import gaussian_splat
+
+
+def test_gaussian_splat_peaks_at_points():
+    hm = gaussian_splat((32, 32), torch.tensor([[8, 8], [20, 24]]), sigma=2.0)
+    assert hm.shape == (1, 32, 32)
+    assert torch.isclose(hm[0, 8, 8], torch.tensor(1.0), atol=1e-4)
+    assert torch.isclose(hm[0, 20, 24], torch.tensor(1.0), atol=1e-4)
+    assert hm.max() <= 1.0 + 1e-5 and hm.min() >= 0.0
+
+
+def test_gaussian_splat_empty_points_is_all_zero():
+    hm = gaussian_splat((16, 16), torch.zeros(0, 2, dtype=torch.long), sigma=2.0)
+    assert hm.shape == (1, 16, 16)
+    assert hm.sum() == 0
+
+
+def test_gaussian_splat_overlap_takes_max_not_sum():
+    hm = gaussian_splat((16, 16), torch.tensor([[8, 8], [8, 9]]), sigma=2.0)
+    assert hm.max() <= 1.0 + 1e-5  # two adjacent centres must not sum past 1
+
+
+# --- XView3Dataset on the synthetic fixture (see conftest.py) ---------------
+from planetar_fusion.data import XView3Dataset  # noqa: E402
+
+
+def test_dataset_tiles_the_scene_on_a_stride_grid(tiny_xview3):
+    root, labels, _ = tiny_xview3
+    ds = XView3Dataset(root, labels, tile=64, stride=32)
+    # 96-px scene, 64-px tile, 32-px stride -> origins {0, 32} on each axis
+    assert len(ds) == 4
+    assert sorted(ds.index) == [("synthetic_scene_000", 0, 0), ("synthetic_scene_000", 0, 32),
+                                ("synthetic_scene_000", 32, 0), ("synthetic_scene_000", 32, 32)]
+
+
+def test_dataset_item_shapes_and_local_points(tiny_xview3):
+    root, labels, _ = tiny_xview3
+    ds = XView3Dataset(root, labels, tile=64, stride=32)
+    img, t = ds[0]  # tile at (0,0): contains points (10,12) and (40,70)? no — col 70 >= 64
+    assert img.shape == (5, 64, 64) and img.dtype == torch.float32
+    assert t["heatmap"].shape == (1, 64, 64)
+    assert t["points"].tolist() == [[10, 12]]
+    assert torch.isclose(t["heatmap"][0, 10, 12], torch.tensor(1.0), atol=1e-4)
+    assert t["length"].tolist() == [120.0] and t["is_vessel"].tolist() == [1.0] and t["is_fishing"].tolist() == [0.0]
+
+
+def test_dataset_offsets_points_into_tile_coordinates(tiny_xview3):
+    root, labels, _ = tiny_xview3
+    ds = XView3Dataset(root, labels, tile=64, stride=32)
+    i = ds.index.index(("synthetic_scene_000", 32, 32))
+    _, t = ds[i]  # tile (32,32) spans rows/cols 32..95: holds (40,70) and (85,88)
+    assert sorted(t["points"].tolist()) == [[8, 38], [53, 56]]
+
+
+def test_dataset_non_vessel_label_has_zero_length_and_no_fishing(tiny_xview3):
+    root, labels, _ = tiny_xview3
+    ds = XView3Dataset(root, labels, tile=64, stride=32)
+    i = ds.index.index(("synthetic_scene_000", 32, 0))  # holds (80,20) non-vessel
+    _, t = ds[i]
+    k = t["points"].tolist().index([48, 20])
+    assert t["is_vessel"][k] == 0.0 and t["is_fishing"][k] == 0.0 and t["length"][k] == 0.0

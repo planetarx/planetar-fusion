@@ -1,0 +1,121 @@
+"""xView3 Sentinel-1 dataset: tile scenes, stack channels, build CenterNet targets.
+
+On-disk layout (xView3 as downloaded):
+    <root>/<scene_id>/{VH_dB,VV_dB,bathymetry,owiMask,owiWindSpeed,...}.tif
+    labels CSV with scene_id, detect_scene_row, detect_scene_column, is_vessel,
+    is_fishing, vessel_length_m, source, confidence, distance_from_shore_km.
+
+A sample is one `tile`×`tile` window of the stacked channels plus a target
+dict: a Gaussian centre heatmap (CenterNet-style) and per-object attributes
+at the labelled points that fall inside the window. "Dark" is not a label
+here (DESIGN §3, §6) — at deployment it is detection minus the AIS feed.
+"""
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+import rasterio
+import rasterio.windows
+import torch
+from torch.utils.data import Dataset
+
+DEFAULT_CHANNELS = ["VH_dB", "VV_dB", "bathymetry", "owiMask", "owiWindSpeed"]
+
+
+def gaussian_splat(shape, points, sigma=2.0):
+    """CenterNet target: a [1,H,W] map with a unit-peak Gaussian at each point.
+
+    `shape` is (H, W); `points` is a LongTensor[N,2] of (row, col). Overlapping
+    Gaussians combine by max, never sum, so the peak is exactly 1.0 and the
+    focal loss's `gt == 1` positive mask stays well defined. Each Gaussian is
+    painted only in a ±3σ window, so cost is O(N·σ²), not O(N·H·W).
+    """
+    h, w = int(shape[0]), int(shape[1])
+    hm = torch.zeros(1, h, w)
+    if points is None or len(points) == 0:
+        return hm
+    rad = max(1, int(3 * sigma))
+    for r, c in points.tolist():
+        r0, r1 = max(0, r - rad), min(h, r + rad + 1)
+        c0, c1 = max(0, c - rad), min(w, c + rad + 1)
+        if r0 >= r1 or c0 >= c1:
+            continue
+        ys = torch.arange(r0, r1).view(-1, 1)
+        xs = torch.arange(c0, c1).view(1, -1)
+        g = torch.exp(-(((ys - r) ** 2 + (xs - c) ** 2) / (2 * sigma**2)))
+        hm[0, r0:r1, c0:c1] = torch.maximum(hm[0, r0:r1, c0:c1], g)
+    return hm
+
+
+def _read(path, window=None):
+    with rasterio.open(path) as ds:
+        a = ds.read(1, window=window).astype("float32")
+    return np.nan_to_num(a, nan=0.0)
+
+
+def _f(x, default=0.0):
+    """Float with NaN/None → default (xView3 leaves non-vessel attributes blank)."""
+    try:
+        v = float(x)
+    except (TypeError, ValueError):
+        return default
+    return default if np.isnan(v) else v
+
+
+class XView3Dataset(Dataset):
+    """Tiles every scene named in `labels_csv` on a `stride` grid.
+
+    Index entries are (scene_id, row0, col0). Per-tile normalisation is a
+    per-channel z-score, which keeps dB and metre-valued ancillary rasters
+    on one scale without a global statistics pass.
+    """
+
+    def __init__(self, root, labels_csv, channels=None, tile=800, stride=704, sigma=2.0):
+        self.root = Path(root)
+        self.tile, self.stride, self.sigma = int(tile), int(stride), float(sigma)
+        self.channels = list(channels or DEFAULT_CHANNELS)
+        self.labels = pd.read_csv(labels_csv)
+        self.index = []
+        for scene_id in self.labels["scene_id"].unique():
+            with rasterio.open(self.root / scene_id / f"{self.channels[0]}.tif") as ds:
+                H, W = ds.height, ds.width
+            for r0 in range(0, max(1, H - self.tile + 1), self.stride):
+                for c0 in range(0, max(1, W - self.tile + 1), self.stride):
+                    self.index.append((scene_id, r0, c0))
+
+    def __len__(self):
+        return len(self.index)
+
+    def read_tile(self, scene_id, r0, c0):
+        """Stacked, z-scored channels for one window → FloatTensor[C,tile,tile]."""
+        win = rasterio.windows.Window(c0, r0, self.tile, self.tile)
+        chans = [_read(self.root / scene_id / f"{ch}.tif", win) for ch in self.channels]
+        img = torch.from_numpy(np.stack(chans)).float()
+        mean = img.mean(dim=(1, 2), keepdim=True)
+        std = img.std(dim=(1, 2), keepdim=True)
+        return (img - mean) / (std + 1e-6)
+
+    def targets(self, scene_id, r0, c0):
+        d = self.labels[self.labels.scene_id == scene_id]
+        pts, length, isv, isf = [], [], [], []
+        for row in d.itertuples(index=False):
+            r = int(row.detect_scene_row) - r0
+            c = int(row.detect_scene_column) - c0
+            if 0 <= r < self.tile and 0 <= c < self.tile:
+                vessel = bool(_f(getattr(row, "is_vessel", True), 0.0))
+                pts.append([r, c])
+                length.append(_f(getattr(row, "vessel_length_m", 0.0)) if vessel else 0.0)
+                isv.append(1.0 if vessel else 0.0)
+                isf.append(1.0 if vessel and bool(_f(getattr(row, "is_fishing", 0.0), 0.0)) else 0.0)
+        pts_t = torch.tensor(pts, dtype=torch.long) if pts else torch.zeros(0, 2, dtype=torch.long)
+        return {
+            "heatmap": gaussian_splat((self.tile, self.tile), pts_t, self.sigma),
+            "points": pts_t,
+            "length": torch.tensor(length, dtype=torch.float32),
+            "is_vessel": torch.tensor(isv, dtype=torch.float32),
+            "is_fishing": torch.tensor(isf, dtype=torch.float32),
+        }
+
+    def __getitem__(self, i):
+        scene_id, r0, c0 = self.index[i]
+        return self.read_tile(scene_id, r0, c0), self.targets(scene_id, r0, c0)
