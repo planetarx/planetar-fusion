@@ -1,0 +1,20 @@
+# Stage 1 — xView3 SAR detector. Paths assume Task 0 staged the data under data/xview3.
+data:
+  root: data/xview3
+  train_labels: data/xview3/train.csv
+  val_labels: data/xview3/validation.csv
+  channels: [VH_dB, VV_dB, bathymetry, owiMask, owiWindSpeed]
+  tile: 800
+  stride: 704
+model:
+  base: 32
+train:
+  epochs: 20
+  batch_size: 8
+  lr: 0.0003
+  num_workers: 8
+  device: cuda
+  amp: true
+out:
+  ckpt_dir: checkpoints
+  run_dir: runs
