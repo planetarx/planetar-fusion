@@ -62,3 +62,26 @@ def test_dataset_non_vessel_label_has_zero_length_and_no_fishing(tiny_xview3):
     _, t = ds[i]
     k = t["points"].tolist().index([48, 20])
     assert t["is_vessel"][k] == 0.0 and t["is_fishing"][k] == 0.0 and t["length"][k] == 0.0
+
+
+def test_read_window_resamples_coarse_ancillary_onto_the_sar_grid(tmp_path):
+    from conftest import CHANNELS, write_scene
+    from planetar_fusion.data import read_window
+    scene_dir, _ = write_scene(tmp_path / "xv", anc_factor=8)   # 96 px SAR, 12 px ancillary
+    img = read_window(scene_dir, CHANNELS, 16, 16, 64)
+    assert img.shape == (5, 64, 64) and torch.isfinite(img).all()
+    bathy = img[CHANNELS.index("bathymetry")]
+    # deepens left to right on the coarse grid -> must still decrease across the SAR-grid tile
+    assert bathy[:, 4].mean() > bathy[:, 32].mean() > bathy[:, 60].mean()
+
+
+def test_nodata_is_masked_out_of_normalisation(tmp_path):
+    from conftest import CHANNELS, write_scene
+    from planetar_fusion.data import read_window
+    scene_dir, _ = write_scene(tmp_path / "xv", nodata_cols=40)
+    vv = read_window(scene_dir, ["VV_dB"], 0, 0, 96)[0]
+    assert torch.isfinite(vv).all()
+    assert (vv[:, :40] == 0).all()                                   # missing pixels -> 0 after z-score
+    valid = vv[:, 40:]
+    assert abs(valid.mean().item()) < 0.1 and abs(valid.std().item() - 1) < 0.1   # z-scored over valid only
+    assert vv[85, 88] > 3                                            # the target at (85,88) still stands out

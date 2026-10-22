@@ -15,6 +15,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import rasterio
+import rasterio.enums
 import rasterio.windows
 import torch
 from torch.utils.data import Dataset
@@ -61,19 +62,41 @@ def tile_origins(size, tile, stride):
 
 def read_window(scene_dir, channels, r0, c0, tile):
     """Stacked, per-channel z-scored window → FloatTensor[C,tile,tile].
-    Shared by XView3Dataset and infer.infer_scene so both see identical input."""
-    win = rasterio.windows.Window(c0, r0, tile, tile)
-    chans = [_read(Path(scene_dir) / f"{ch}.tif", win) for ch in channels]
-    img = torch.from_numpy(np.stack(chans)).float()
-    mean = img.mean(dim=(1, 2), keepdim=True)
-    std = img.std(dim=(1, 2), keepdim=True)
-    return (img - mean) / (std + 1e-6)
+    Shared by XView3Dataset and infer.infer_scene so both see identical input.
+
+    The window is defined on the grid of `channels[0]`. Real xView3 scenes put SAR on a 10 m
+    grid and the ancillary rasters on a 500 m one, so any channel on a different grid is read
+    by the window's geographic bounds and resampled (bilinear) to tile×tile. Missing pixels
+    (the raster's nodata, -32768 in xView3, or NaN) are excluded from the z-score and set to 0
+    after it, so a scene edge cannot swamp the normalisation."""
+    scene_dir = Path(scene_dir)
+    with rasterio.open(scene_dir / f"{channels[0]}.tif") as ref:
+        win = rasterio.windows.Window(c0, r0, tile, tile)
+        bounds = rasterio.windows.bounds(win, ref.transform)
+        ref_grid = (ref.transform, ref.width, ref.height)
+    chans = [_read(scene_dir / f"{ch}.tif", win, bounds, ref_grid, tile) for ch in channels]
+    out = []
+    for a in chans:
+        valid = np.isfinite(a)
+        if valid.any():
+            v = a[valid]
+            a = np.where(valid, (a - v.mean()) / (v.std() + 1e-6), 0.0)
+        else:
+            a = np.zeros_like(a)
+        out.append(a.astype("float32"))
+    return torch.from_numpy(np.stack(out))
 
 
-def _read(path, window=None):
+def _read(path, window, bounds, ref_grid, tile):
+    """One channel's window as float32 [tile,tile], NaN where missing."""
     with rasterio.open(path) as ds:
-        a = ds.read(1, window=window).astype("float32")
-    return np.nan_to_num(a, nan=0.0)
+        if (ds.transform, ds.width, ds.height) == ref_grid:
+            a = ds.read(1, window=window, boundless=True, masked=True)
+        else:
+            w = rasterio.windows.from_bounds(*bounds, transform=ds.transform)
+            a = ds.read(1, window=w, out_shape=(tile, tile), boundless=True, masked=True,
+                        resampling=rasterio.enums.Resampling.bilinear)
+    return np.ma.filled(a.astype("float32"), np.nan)
 
 
 def _f(x, default=0.0):
