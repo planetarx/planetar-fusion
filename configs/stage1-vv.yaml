@@ -1,0 +1,26 @@
+# Stage 1, VV-only variant — the one that can run inside planetar-sat (Task 9). xView3 is
+# CC BY-NC-SA, so its weights stay a demo/benchmark artifact (DESIGN §3), never shipped. planetar-sat reads only the VV
+# measurement GeoTIFF of a GRD scene (no VH, no bathymetry/wind rasters), so a model that
+# runs there must see VV alone. Per-tile z-scoring makes it indifferent to a constant dB
+# offset, so uncalibrated GRD DN converted to dB (20·log10 DN) is close enough to try.
+# Paths assume Task 0 staged the validation split under data/xview3 and
+# `python -m planetar_fusion.bench split` wrote data/xview3/split/ (scenes, not rows).
+data:
+  root: data/xview3
+  train_labels: data/xview3/split/train.csv
+  val_labels: data/xview3/split/holdout.csv
+  channels: [VV_dB]
+  tile: 800
+  stride: 704
+model:
+  base: 32
+train:
+  epochs: 20
+  batch_size: 8
+  lr: 0.0003
+  num_workers: 8
+  device: cuda
+  amp: true
+out:
+  ckpt_dir: checkpoints/stage1-vv
+  run_dir: runs/stage1-vv

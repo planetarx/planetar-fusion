@@ -35,4 +35,4 @@ fi
 
 echo "== smoke: tests =="
 .venv/bin/pytest -q
-echo "== ready: .venv/bin/python -m planetar_fusion.train --config configs/stage1.yaml =="
+echo "== ready: bash scripts/pod_run.sh   (split → train → holdout score, both configs) =="

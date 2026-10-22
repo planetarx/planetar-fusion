@@ -1,8 +1,10 @@
-# Stage 1 — xView3 SAR detector. Paths assume Task 0 staged the data under data/xview3.
+# Stage 1 — xView3 SAR detector, full 5-channel xView3 stack (the leaderboard-comparable run).
+# Paths assume Task 0 staged the validation split under data/xview3 and
+# `python -m planetar_fusion.bench split` wrote data/xview3/split/ (scenes, not rows).
 data:
   root: data/xview3
-  train_labels: data/xview3/train.csv
-  val_labels: data/xview3/validation.csv
+  train_labels: data/xview3/split/train.csv
+  val_labels: data/xview3/split/holdout.csv
   channels: [VH_dB, VV_dB, bathymetry, owiMask, owiWindSpeed]
   tile: 800
   stride: 704
@@ -16,5 +18,5 @@ train:
   device: cuda
   amp: true
 out:
-  ckpt_dir: checkpoints
-  run_dir: runs
+  ckpt_dir: checkpoints/stage1
+  run_dir: runs/stage1

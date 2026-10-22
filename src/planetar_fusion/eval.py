@@ -33,11 +33,24 @@ def _metric():
 
 
 def score_predictions(preds_csv, gt_csv, shore_root=None, score_all=False, drop_low_detect=False,
-                      distance_tolerance=200, shore_tolerance=2, costly_dist=False):
+                      distance_tolerance=200, shore_tolerance=2, costly_dist=False, scene_ids=None):
+    """`scene_ids` names the scenes that were inferred. Without it the ground truth is cut to
+    the scenes present in the predictions (the reference's behaviour), which silently drops a
+    scene that produced zero detections — pass it whenever a scene list is known."""
     m = _metric()
     pred = pd.read_csv(preds_csv, index_col=False)
     gt = pd.read_csv(gt_csv, index_col=False)
-    gt = gt[gt["scene_id"].isin(pred["scene_id"].unique())].reset_index(drop=True)
+    keep = scene_ids if scene_ids is not None else pred["scene_id"].unique()
+    gt = gt[gt["scene_id"].isin(keep)].reset_index(drop=True)
+    # The reference crashes on a scene with no predictions (empty distance matrix). Give each
+    # such scene one sentinel far off the image: it matches nothing, so every label there is a
+    # false negative, at the cost of one false positive — the score can only go down.
+    empty = sorted(set(keep) - set(pred["scene_id"]))
+    if empty:
+        sentinel = pd.DataFrame({"scene_id": empty, "detect_scene_row": -10**6,
+                                 "detect_scene_column": -10**6, "is_vessel": False,
+                                 "is_fishing": False, "vessel_length_m": 0.0, "score": 0.0})
+        pred = pd.concat([pred, sentinel], ignore_index=True)
     if not score_all:
         if drop_low_detect:
             pred = m.drop_low_confidence_preds(pred, gt, distance_tolerance=distance_tolerance,

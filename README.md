@@ -6,7 +6,7 @@ SAR↔AIS association from AIS-on co-occurrence (free labels) and applies it to 
 (`../planetar/docs/recenter-learned-fusion.md`); this repo makes the core idea real on the two
 modalities we actually run — Sentinel-1 SAR + AIS — then stages the rest.
 
-> **Status: Stage 1 code built and tested (Tasks 1–7, 2026-10-01); awaiting the xView3 download (Task 0) and the first RunPod training run (Task 8).** Design: [`docs/DESIGN.md`](docs/DESIGN.md). Plan: [`docs/plans/2026-07-26-stage1-xview3-detector.md`](docs/plans/2026-07-26-stage1-xview3-detector.md).
+> **Status: Stage 1 code built and tested (Tasks 1–7, 2026-10-01); the pod run is scripted (2026-10-22). Awaiting the xView3 download (Task 0), then `bash scripts/runpod_setup.sh <mirror>` + `bash scripts/pod_run.sh` (Task 8).** Design: [`docs/DESIGN.md`](docs/DESIGN.md). Plan: [`docs/plans/2026-07-26-stage1-xview3-detector.md`](docs/plans/2026-07-26-stage1-xview3-detector.md).
 
 ## The v0, in two stages (single GPU throughout)
 
@@ -27,12 +27,14 @@ modalities we actually run — Sentinel-1 SAR + AIS — then stages the rest.
 | `src/planetar_fusion/losses.py` | ✅ Penalty-reduced focal + L1(log1p length) + BCE at GT centres; proven by an overfit-one-batch test |
 | `src/planetar_fusion/train.py`, `configs/stage1.yaml` | ✅ Config-driven loop → per-epoch checkpoints + `runs/metrics.jsonl` |
 | `src/planetar_fusion/infer.py` | ✅ Full-scene tile → peaks → global NMS → xView3 CSV; recovers the synthetic fixture's targets |
-| `src/planetar_fusion/eval.py` + `vendor/xview3-reference` | ✅ The leaderboard `MR` via the vendored reference scorer (BSD-3; `git submodule update --init`) |
-| `tests/` | ✅ 18 tests; `tests/conftest.py` writes a synthetic scene in the xView3 layout (torchgeo has no xView3 loader) |
-| `scripts/runpod_setup.sh` | ⚠️ Written, not yet run on a pod |
+| `src/planetar_fusion/eval.py` + `vendor/xview3-reference` | ✅ The leaderboard `MR` via the vendored reference scorer (BSD-3; `git submodule update --init`). `scene_ids=` keeps a scene with zero detections in the score (the reference drops it) |
+| `src/planetar_fusion/bench.py` | ✅ `bench split`: validation labels → scene-disjoint `train.csv` / `holdout.csv` (+ `split.json`, seeded). `bench score`: infer every holdout scene → `preds.csv` + `score.json` |
+| `tests/` | ✅ 21 tests; `tests/conftest.py` writes a synthetic scene in the xView3 layout (torchgeo has no xView3 loader) |
+| `scripts/runpod_setup.sh`, `scripts/pod_run.sh` | ⚠️ Env bring-up, then split → train → holdout score for each config. `pod_run.sh` smoke-tested on CPU with synthetic scenes (2026-10-22); neither yet run on a pod |
+| `configs/stage1.yaml`, `configs/stage1-vv.yaml` | 5-channel (leaderboard-comparable) and **VV-only** (runnable in `planetar-sat`, Task 9; xView3 weights are CC BY-NC-SA → demo/benchmark only, never shipped) — both train in one pod session |
 | **Task 0 — xView3 data** | ❌ Human prerequisite: register at iuu.xview.us, download validation (50 scenes, ~123 GB) + labels to `data/xview3/` |
 | **Task 8 — RunPod run + real `MR`** | ❌ Blocked on Task 0 |
-| **Task 9 — `planetar-sat --detector learned`** | ❌ Needs a channel-set decision: planetar-sat scenes are single-pol GRD intensity, not the 5-channel xView3 stack |
+| **Task 9 — `planetar-sat --detector learned`** | ❌ Channel set chosen 2026-10-22: **VV-only** (`stage1-vv.yaml`) — `planetar-sat` reads only the VV measurement GeoTIFF. Open: GRD DN → dB at inference, and radar-geometry vs xView3's reprojected grid; compare against CFAR on a cached scene |
 
 ```
 uv venv --python 3.11 .venv && uv pip install --python .venv/bin/python -e ".[dev]"

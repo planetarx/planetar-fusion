@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - **Data is credentialed-open, not automatic.** xView3 requires registering at `https://iuu.xview.us/dataset` and accepting terms (Task 0, a human prerequisite). **Mirror our copy on first download** — it is hosted on iuu.xview.us, not AWS Open Data (retirement risk). Work from **validation (50 scenes, ~123 GB) + a train subset**, not the full ~2 TB.
-- **License:** xView3 is commercial-usable (DIU "free and open"); the reference scorer is MIT/Apache. **No Global Fishing Watch (CC BY-NC) data in this model.**
+- **License:** ~~xView3 is commercial-usable (DIU "free and open")~~ — **corrected (DESIGN §3, 2026-07-26): the dataset is CC BY-NC-SA 4.0**, so trained weights are a research/benchmark/demo artifact, never shipped in the GPLv3 code or paid services. The reference scorer is MIT/Apache. **No Global Fishing Watch (CC BY-NC) data in this model.**
 - **Compute: RunPod, single GPU** (V100/3090/4090/A100-class). Training runs on the pod; checkpoints + metrics come back down. Dev/tests run locally on CPU with `torchgeo`'s "xView3 tiny".
 - **"Dark" = detection − AIS at deployment**, never a SAR-only classifier (DESIGN §3.2, §6).
 - **Benchmark honestly:** report the xView3 `MR` and its components (`F1_D`, `F1_S`, `is_vessel` F1, `is_fishing` F1, length error) via the reference scorer; state the split used and compare to the published reference/leaderboard.
@@ -428,7 +428,8 @@ def nms(points, scores, min_dist=10):
 
 **Interfaces:** Produces a trained checkpoint + a real `MR` score on the validation split.
 
-- [ ] **Step 1: Write `scripts/runpod_setup.sh`** — per the founder's existing RunPod workflow: clone the repo on the pod, `pip install -e ".[dev]"` with CUDA torch, stage `data/xview3` from our mirror to pod storage, verify `nvidia-smi` + `torch.cuda.is_available()`.
+- [x] **Step 1: Write `scripts/runpod_setup.sh`** — per the founder's existing RunPod workflow: clone the repo on the pod, `pip install -e ".[dev]"` with CUDA torch, stage `data/xview3` from our mirror to pod storage, verify `nvidia-smi` + `torch.cuda.is_available()`.
+- [x] **Step 1b (2026-10-22): `bench.py` + `scripts/pod_run.sh`** — validation labels split by scene (`bench split`, seed 0, 10 holdout), both configs trained, last checkpoint scored on the holdout (`bench score`). Only the validation split is downloaded, so `train.csv` comes from the split.
 - [ ] **Step 2: Train on the pod** — `python -m planetar_fusion.train --config configs/stage1.yaml` on the **validation split + a train subset** (start small; scale scenes up if the GPU/time budget allows). Watch `runs/metrics.jsonl` for a decreasing `train_loss`.
 - [ ] **Step 3: Infer + score** — run `infer.py` over the held-back validation scenes, then `eval.py` → record the `MR` + components.
 - [ ] **Step 4: Pull artifacts down** — checkpoint + `runs/metrics.jsonl` + the score back to bb; write the number into `docs/DESIGN.md` (a results note) and compare to the published reference/leaderboard.
