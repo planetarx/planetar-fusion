@@ -1,0 +1,23 @@
+# Stage 1 — limited 5-channel run sized for a local RTX 2070 (8 GB, ~4.6 GB free beside the
+# desktop). Measured 2026-10-22: batch 8 and 4 run out of memory, batch 2 peaks at 2.3 GB at
+# 0.18 s/step, so one epoch of 54,462 tiles is ~80 min; 4 epochs fit overnight. Same split and
+# holdout as configs/stage1.yaml, so the score is comparable but under-trained.
+data:
+  root: data/xview3
+  train_labels: data/xview3/split/train.csv
+  val_labels: data/xview3/split/holdout.csv
+  channels: [VH_dB, VV_dB, bathymetry, owiMask, owiWindSpeed]
+  tile: 800
+  stride: 704
+model:
+  base: 32
+train:
+  epochs: 4
+  batch_size: 2
+  lr: 0.0003
+  num_workers: 4
+  device: cuda
+  amp: true
+out:
+  ckpt_dir: checkpoints/stage1-2070
+  run_dir: runs/stage1-2070
