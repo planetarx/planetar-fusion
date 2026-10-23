@@ -8,7 +8,13 @@
 # leaves <run_dir>/metrics.jsonl and <run_dir>/bench/{preds.csv,score.json}; pull those
 # plus the checkpoint back to bb (Task 8, step 4). Re-running a config appends to its
 # metrics.jsonl and overwrites its checkpoints — move a finished run aside first.
+#
+# AUTO_STOP=1 stops this Runpod pod when the script exits, success or failure, so an
+# unattended run stops billing for the GPU (the disk is kept for pulling results).
 set -euo pipefail
+if [ "${AUTO_STOP:-0}" = 1 ]; then
+  trap 'echo "== exit $? at $(date -u +%FT%TZ); stopping pod $RUNPOD_POD_ID =="; runpodctl stop pod "$RUNPOD_POD_ID"' EXIT
+fi
 cd "$(dirname "$0")/.."
 PY=.venv/bin/python
 LABELS=${LABELS:-data/xview3/validation.csv}
