@@ -13,9 +13,11 @@ cd "$(dirname "$0")/.."
 PY=.venv/bin/python
 LABELS=${LABELS:-data/xview3/validation.csv}
 SPLIT=data/xview3/split
+SHORE=${SHORE:-data/xview3/shoreline}
 HOLDOUT=${HOLDOUT:-10}
 
 [ -f "$LABELS" ] || { echo "missing $LABELS — stage the xView3 validation split first (Task 0)"; exit 1; }
+[ -d "$SHORE" ] || { echo "missing $SHORE — without it the close-to-shore F1 scores 0"; exit 1; }
 if [ ! -f "$SPLIT/split.json" ]; then
   $PY -m planetar_fusion.bench split --labels "$LABELS" --out "$SPLIT" --holdout "$HOLDOUT" --seed 0
 fi
@@ -29,5 +31,5 @@ for cfg in "${configs[@]}"; do
   run_dir=$($PY -c 'import sys,yaml; print(yaml.safe_load(open(sys.argv[1]))["out"]["run_dir"])' "$cfg")
   echo "== score $ckpt on the holdout =="
   $PY -m planetar_fusion.bench score --ckpt "$ckpt" --root data/xview3 \
-      --labels "$SPLIT/holdout.csv" --out "$run_dir/bench"
+      --labels "$SPLIT/holdout.csv" --shore-root "$SHORE" --out "$run_dir/bench"
 done
