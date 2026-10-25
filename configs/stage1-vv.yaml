@@ -21,6 +21,7 @@ train:
   num_workers: 8
   device: cuda
   amp: true
+  max_grad_norm: 5.0   # clip; see train.train_step
 out:
   ckpt_dir: checkpoints/stage1-vv
   run_dir: runs/stage1-vv

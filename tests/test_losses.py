@@ -40,3 +40,13 @@ def test_loss_with_no_points_is_finite():
     loss, parts = detector_loss(CenterNetSAR(5)(x), target)
     assert torch.isfinite(loss)
     assert parts["len"] == 0.0 and parts["v"] == 0.0 and parts["f"] == 0.0
+
+
+def test_focal_heatmap_is_finite_on_fp16_saturated_predictions():
+    """Under autocast the heatmap arrives as fp16, where the 1 - eps clamp rounds to 1.0 and
+    log(1 - pred) is -inf; the loss must still be finite."""
+    from planetar_fusion.losses import focal_heatmap
+
+    pred = torch.tensor([[[[1.0, 0.0], [0.5, 1.0]]]], dtype=torch.float16)
+    gt = torch.tensor([[[[1.0, 0.0], [0.0, 0.2]]]])
+    assert torch.isfinite(focal_heatmap(pred, gt))

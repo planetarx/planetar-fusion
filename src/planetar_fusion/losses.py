@@ -15,8 +15,9 @@ import torch.nn.functional as F
 
 def focal_heatmap(pred, gt, alpha=2.0, beta=4.0, eps=1e-6):
     """Penalty-reduced pixelwise focal loss, normalised by the number of
-    positives (gt == 1 exactly, which gaussian_splat guarantees at centres)."""
-    pred = pred.clamp(eps, 1 - eps)
+    positives (gt == 1 exactly, which gaussian_splat guarantees at centres).
+    Computed in float32: under autocast `pred` is fp16, where 1 - eps rounds to 1.0."""
+    pred = pred.float().clamp(eps, 1 - eps)
     pos = (gt == 1).float()
     neg = 1.0 - pos
     pos_loss = -((1 - pred) ** alpha) * torch.log(pred) * pos

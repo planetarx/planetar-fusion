@@ -85,3 +85,24 @@ def test_nodata_is_masked_out_of_normalisation(tmp_path):
     valid = vv[:, 40:]
     assert abs(valid.mean().item()) < 0.1 and abs(valid.std().item() - 1) < 0.1   # z-scored over valid only
     assert vv[85, 88] > 3                                            # the target at (85,88) still stands out
+
+
+def test_read_window_bounds_a_near_constant_channel(tmp_path):
+    """owiMask is almost constant inside a tile, so a z-score turns its rare odd pixels into
+    values of ~sqrt(n) (≈90 in real xView3 tiles); that overflowed fp16 training (2026-10-24).
+    The normalised input stays within ±Z_CLIP."""
+    import numpy as np
+    import rasterio
+    from rasterio.transform import from_origin
+
+    from planetar_fusion.data import Z_CLIP, read_window
+
+    d = tmp_path / "scene"
+    d.mkdir()
+    a = np.zeros((64, 64), "float32")
+    a[5, 5] = 2.0  # one land pixel in a sea tile
+    with rasterio.open(d / "owiMask.tif", "w", driver="GTiff", height=64, width=64, count=1,
+                       dtype="float32", crs="EPSG:4326", transform=from_origin(0, 0, 1e-4, 1e-4)) as ds:
+        ds.write(a, 1)
+    x = read_window(d, ["owiMask"], 0, 0, 64)
+    assert float(x.abs().max()) <= Z_CLIP

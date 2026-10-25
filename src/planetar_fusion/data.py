@@ -21,6 +21,10 @@ import torch
 from torch.utils.data import Dataset
 
 DEFAULT_CHANNELS = ["VH_dB", "VV_dB", "bathymetry", "owiMask", "owiWindSpeed"]
+# Bound on the per-tile z-score. A channel that is almost constant inside a tile (owiMask over
+# open sea) z-scores its rare odd pixels to ~sqrt(tile²) — ~90 seen in real tiles — which
+# overflowed fp16 training on 2026-10-23. Real SAR targets sit well inside ±10σ of a tile.
+Z_CLIP = 10.0
 
 
 def gaussian_splat(shape, points, sigma=2.0):
@@ -68,7 +72,7 @@ def read_window(scene_dir, channels, r0, c0, tile):
     grid and the ancillary rasters on a 500 m one, so any channel on a different grid is read
     by the window's geographic bounds and resampled (bilinear) to tile×tile. Missing pixels
     (the raster's nodata, -32768 in xView3, or NaN) are excluded from the z-score and set to 0
-    after it, so a scene edge cannot swamp the normalisation."""
+    after it, so a scene edge cannot swamp the normalisation. The result is clipped to ±Z_CLIP."""
     scene_dir = Path(scene_dir)
     with rasterio.open(scene_dir / f"{channels[0]}.tif") as ref:
         win = rasterio.windows.Window(c0, r0, tile, tile)
@@ -80,7 +84,7 @@ def read_window(scene_dir, channels, r0, c0, tile):
         valid = np.isfinite(a)
         if valid.any():
             v = a[valid]
-            a = np.where(valid, (a - v.mean()) / (v.std() + 1e-6), 0.0)
+            a = np.where(valid, np.clip((a - v.mean()) / (v.std() + 1e-6), -Z_CLIP, Z_CLIP), 0.0)
         else:
             a = np.zeros_like(a)
         out.append(a.astype("float32"))
