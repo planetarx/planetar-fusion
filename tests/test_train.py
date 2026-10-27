@@ -113,3 +113,22 @@ def test_train_stops_when_the_model_goes_non_finite(tiny_xview3, tmp_path, monke
     with pytest.raises(RuntimeError, match="non-finite"):
         train_mod.train(cfg_path)
     assert not (tmp_path / "ckpt" / "stage1_ep0.pt").exists()
+
+
+def test_optimizer_decays_conv_weights_but_not_batchnorm_or_biases():
+    """Convs that feed a BatchNorm are scale-invariant, so plain Adam grows them without
+    bound (40-60x in norm over 3 epochs of the 2026-10-26 run) until fp16 overflows.
+    Decoupled weight decay on conv weights holds their scale; BN affine params and biases
+    are left undecayed, as usual."""
+    from planetar_fusion.model import CenterNetSAR
+    from planetar_fusion.train import make_optimizer
+
+    model = CenterNetSAR(5, base=8)
+    opt = make_optimizer(model, {"lr": 1e-3, "weight_decay": 0.05})
+    assert isinstance(opt, torch.optim.AdamW)
+    decay = {id(p) for g in opt.param_groups if g["weight_decay"] == 0.05 for p in g["params"]}
+    names = {id(p): n for n, p in model.named_parameters()}
+    assert names[id(model.d3[0].weight)] and id(model.d3[0].weight) in decay
+    assert id(model.d3[1].weight) not in decay  # BatchNorm gamma
+    assert id(model.head_hm.bias) not in decay
+    assert sum(len(g["params"]) for g in opt.param_groups) == len(list(model.parameters()))

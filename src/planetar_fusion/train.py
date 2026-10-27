@@ -67,6 +67,17 @@ def _restore(model, saved):
             b.copy_(saved[n])
 
 
+def make_optimizer(model, t):
+    """AdamW with decoupled weight decay on conv weights only. The convs feed BatchNorm, so
+    their scale does not change the loss and plain Adam lets it grow without bound (40-60x
+    in norm over three epochs on 2026-10-26) until fp16 activations overflow. BatchNorm
+    affine params and biases (all 1-D) are not decayed."""
+    decay = [p for p in model.parameters() if p.ndim > 1]
+    rest = [p for p in model.parameters() if p.ndim <= 1]
+    return torch.optim.AdamW([{"params": decay, "weight_decay": t.get("weight_decay", 0.0)},
+                              {"params": rest, "weight_decay": 0.0}], lr=t["lr"])
+
+
 def load_config(path):
     with open(path) as f:
         return yaml.safe_load(f)
@@ -80,7 +91,7 @@ def train(config_path):
     dl = DataLoader(ds, batch_size=t["batch_size"], shuffle=True,
                     num_workers=t["num_workers"], collate_fn=collate)
     model = CenterNetSAR(len(d["channels"]), base=cfg.get("model", {}).get("base", 32)).to(dev)
-    opt = torch.optim.Adam(model.parameters(), t["lr"])
+    opt = make_optimizer(model, t)
     use_amp = bool(t.get("amp")) and dev == "cuda"
     scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
     ckpt_dir, run_dir = Path(o["ckpt_dir"]), Path(o["run_dir"])
