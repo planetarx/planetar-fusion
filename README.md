@@ -6,7 +6,7 @@ SAR↔AIS association from AIS-on co-occurrence (free labels) and applies it to 
 (`../planetar/docs/recenter-learned-fusion.md`); this repo makes the core idea real on the two
 modalities we actually run — Sentinel-1 SAR + AIS — then stages the rest.
 
-> **Status (2026-10-28): Stage 1 built and tested; xView3 validation data in place. Third RTX 2070 run (stability fixes + weight decay) trained stably for 4 epochs — best holdout aggregate 0.216 (epoch 3), still rising. Next: a longer run (Runpod, Task 8), a threshold sweep, then Task 9.** Design: [`docs/DESIGN.md`](docs/DESIGN.md). Plan: [`docs/plans/2026-07-26-stage1-xview3-detector.md`](docs/plans/2026-07-26-stage1-xview3-detector.md).
+> **Status (2026-10-28): Stage 1 built and tested; xView3 validation data in place. Third RTX 2070 run (stability fixes + weight decay) trained stably for 4 epochs — best holdout aggregate 0.216 (epoch 3) at thresh 0.3, 0.253 at thresh 0.15, still rising. Next: a longer run (Runpod, Task 8), a threshold sweep, then Task 9.** Design: [`docs/DESIGN.md`](docs/DESIGN.md). Plan: [`docs/plans/2026-07-26-stage1-xview3-detector.md`](docs/plans/2026-07-26-stage1-xview3-detector.md).
 
 ## The v0, in two stages (single GPU throughout)
 
@@ -53,6 +53,20 @@ Weak spots: close-to-shore F1 ≈ 0.02, fishing F1 = 0 in every run, and 1,113
 predictions against 3,468 holdout labels at thresh 0.3, so a lower threshold may lift loc F1.
 Four epochs on 40 scenes is under-trained, and the holdout is our own 10 scenes, not xView3's
 withheld set — a progress number, not a leaderboard claim.
+
+Threshold sweep of epoch 3 (2026-10-28; one inference pass at 0.05, then re-filtered by score,
+which matches re-running inference because NMS only lets a higher-scoring point suppress;
+`runs/stage1-2070-wd/sweep/sweep.json`):
+
+| thresh | 0.05 | 0.1 | **0.15** | 0.2 | 0.25 | 0.3 | 0.4 | 0.5 |
+|---|---|---|---|---|---|---|---|---|
+| aggregate | 0.169 | 0.247 | **0.253** | 0.242 | 0.229 | 0.216 | 0.174 | 0.113 |
+| loc F1 | 0.380 | 0.558 | 0.583 | 0.567 | 0.537 | 0.503 | 0.409 | 0.277 |
+| loc F1 shore | 0.181 | 0.166 | 0.096 | 0.049 | 0.026 | 0.017 | 0.009 | 0.011 |
+| preds | 6,704 | 2,711 | 1,882 | 1,525 | 1,289 | 1,113 | 799 | 493 |
+
+The threshold was picked on the holdout itself, so 0.253 is slightly optimistic; pick it on a
+train-side scene next time. Close-to-shore detections sit at low scores (shore F1 0.18 at 0.05).
 
 Run 1 (pre-fix, `runs/stage1-2070-prefix/`), for reference: ep0 0.101, ep1 0.136, ep2 0.002, ep3 0
 (NaN BatchNorm stats).
