@@ -6,7 +6,7 @@ SAR↔AIS association from AIS-on co-occurrence (free labels) and applies it to 
 (`../planetar/docs/recenter-learned-fusion.md`); this repo makes the core idea real on the two
 modalities we actually run — Sentinel-1 SAR + AIS — then stages the rest.
 
-> **Status (2026-10-28): Stage 1 built and tested; xView3 validation data in place. Third RTX 2070 run (stability fixes + weight decay) trained stably for 4 epochs — best holdout aggregate 0.216 (epoch 3) at thresh 0.3, 0.253 at thresh 0.15, still rising. Next: a longer run (Runpod, Task 8), a threshold sweep, then Task 9.** Design: [`docs/DESIGN.md`](docs/DESIGN.md). Plan: [`docs/plans/2026-07-26-stage1-xview3-detector.md`](docs/plans/2026-07-26-stage1-xview3-detector.md).
+> **Status (2026-10-29): Stage 1 built and tested; xView3 validation data in place. Best holdout aggregate 0.253 (Run 3, 5-channel, epoch 3, thresh 0.15). The dual-pol (VH+VV) model `planetar-sat` can run peaks at 0.189 (Run 4, epoch 7, thresh 0.25); its 12-epoch constant-LR run destabilised after epoch 8. Task 9 works end to end on a real Sentinel-1C scene. Next: an LR schedule + best-checkpoint selection, then the dark-vessel step.** Design: [`docs/DESIGN.md`](docs/DESIGN.md). Plan: [`docs/plans/2026-07-26-stage1-xview3-detector.md`](docs/plans/2026-07-26-stage1-xview3-detector.md).
 
 ## The v0, in two stages (single GPU throughout)
 
@@ -38,7 +38,8 @@ modalities we actually run — Sentinel-1 SAR + AIS — then stages the rest.
 | **Run 3 (2026-10-27)** | ✅ + AdamW weight decay 0.05 on conv weights only (2771de1, `train.make_optimizer`). Skipped batches 26 / 26 / 15 / 12; train loss 1.97 → 0.81 → 0.68 → 0.65; largest conv norm levels off ~195. ~1.8 h/epoch at 4.2 it/s once the SAR rasters were re-tiled (below). Holdout scores below |
 | **SAR re-tile (2026-10-27)** | ✅ xView3 ships VH/VV as uncompressed one-row strips, so each 800-px tile read pulled ~92 MB per channel and the loader was disk-bound. `scripts/retile_xview3.py data/xview3` rewrites them in place as 512×512 tiles (lossless, verified per file). Run it after any fresh download |
 | **Task 8 — RunPod run + real `MR`** | ❌ Not started; needs a credit top-up (full run ≈ $11–15 on a Secure 4090) |
-| **Task 9 — `planetar-sat --detector learned`** | ❌ Channel set chosen 2026-10-22: **VV-only** (`stage1-vv.yaml`) — `planetar-sat` reads only the VV measurement GeoTIFF. Open: GRD DN → dB at inference, and radar-geometry vs xView3's reprojected grid; compare against CFAR on a cached scene |
+| **Run 4 — dual-pol (2026-10-28)** | ⚠️ `configs/stage1-dualpol.yaml` (VH+VV only, 12 epochs, wd 0.05, constant LR 3e-4). Stable to epoch 8, then skipped batches 125 → 1,469 → 2,584 → 9,259 and length accuracy collapsed; ep11 scores 0.102 at best. Best checkpoint **epoch 7: 0.189 at thresh 0.25**. Results below |
+| **Task 9 — `planetar-sat --detector learned`** | ✅ 2026-10-28/29, `planetar-sat` branch `learned-detector`. Uses the **dual-pol** model (VH+VV, both in every CDSE 1SDV GRD), not VV-only. DN → 20·log10 dB, staged as tiled rasters; geocoded with the annotation grid. On the S1C 2026-05-08 scene (radar geometry, no CRS), ep7 at 0.25 gave 36 sea detections vs CFAR's 4,275; all 36 sit within 200 m of a CFAR detection (median 17 m, median CFAR SNR 21), covering 18 of CFAR's 50 detections above SNR 20. No AIS for that date, so neither side is ground-truthed. `runs/demo/` |
 
 Holdout scores, Run 3 (10 scenes, `bench score`, thresh 0.3, with shoreline; `runs/stage1-2070-wd/`):
 
@@ -67,6 +68,20 @@ which matches re-running inference because NMS only lets a higher-scoring point 
 
 The threshold was picked on the holdout itself, so 0.253 is slightly optimistic; pick it on a
 train-side scene next time. Close-to-shore detections sit at low scores (shore F1 0.18 at 0.05).
+
+Run 4 (dual-pol) threshold sweeps, aggregate per checkpoint (`runs/stage1-dualpol/sweep-ep<N>/sweep.json`; ep11 in `sweep/`):
+
+| thresh | 0.05 | 0.1 | 0.15 | 0.2 | 0.25 | 0.3 | 0.4 |
+|---|---|---|---|---|---|---|---|
+| epoch 3 | 0.103 | 0.154 | 0.161 | 0.055 | 0 | 0 | 0 |
+| epoch 5 | 0.123 | 0.169 | 0.148 | 0.105 | 0.020 | 0 | 0 |
+| epoch 7 | 0.092 | 0.135 | 0.167 | 0.185 | **0.189** | 0.155 | 0.044 |
+| epoch 8 | 0.056 | 0.109 | 0.149 | 0.171 | 0.158 | 0.131 | 0.035 |
+| epoch 11 | 0.062 | 0.083 | 0.095 | 0.102 | 0.095 | 0.077 | 0.015 |
+
+Epoch 7 at 0.25: loc F1 0.452, shore 0.023, vessel 0.727, fishing 0, length acc 0.337, 1,400
+preds. Dual-pol trails the 5-channel Run 3 (0.253) — the ancillary channels (wind, bathymetry)
+help — but it is the model a raw GRD scene can feed.
 
 Run 1 (pre-fix, `runs/stage1-2070-prefix/`), for reference: ep0 0.101, ep1 0.136, ep2 0.002, ep3 0
 (NaN BatchNorm stats).
