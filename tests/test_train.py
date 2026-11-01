@@ -132,3 +132,76 @@ def test_optimizer_decays_conv_weights_but_not_batchnorm_or_biases():
     assert id(model.d3[1].weight) not in decay  # BatchNorm gamma
     assert id(model.head_hm.bias) not in decay
     assert sum(len(g["params"]) for g in opt.param_groups) == len(list(model.parameters()))
+
+
+def test_lr_factor_warms_up_then_cosine_decays_to_the_floor():
+    """Run 4's constant LR destabilised after epoch 8 (train loss rose from epoch 2), so the
+    LR warms up linearly and then cosine-decays to min_lr_ratio of the base."""
+    from planetar_fusion.train import lr_factor
+
+    f = [lr_factor(s, total=100, warmup=10, min_ratio=0.05) for s in range(100)]
+    assert f[0] == 0.1 and abs(f[9] - 1.0) < 1e-9
+    assert all(a >= b for a, b in zip(f[9:], f[10:]))  # non-increasing after warm-up
+    assert abs(lr_factor(100, 100, 10, 0.05) - 0.05) < 1e-9
+    assert 0.05 < f[55] < 1.0
+
+
+def _tiny_cfg(tiny_xview3, tmp_path, **train):
+    root, labels, _ = tiny_xview3
+    return {
+        "data": {"root": str(root), "train_labels": str(labels), "val_labels": str(labels),
+                 "channels": ["VH_dB", "VV_dB", "bathymetry", "owiMask", "owiWindSpeed"],
+                 "tile": 64, "stride": 32},
+        "model": {"base": 8},
+        "train": {"epochs": 3, "batch_size": 2, "lr": 1e-3, "num_workers": 0, "device": "cpu",
+                  "amp": False, **train},
+        "out": {"ckpt_dir": str(tmp_path / "ckpt"), "run_dir": str(tmp_path / "runs")},
+    }
+
+
+def test_cosine_schedule_ends_at_the_floor_and_logs_the_lr(tiny_xview3, tmp_path):
+    from planetar_fusion.train import train
+
+    cfg_path = tmp_path / "cfg.yaml"
+    cfg_path.write_text(yaml.safe_dump(_tiny_cfg(tiny_xview3, tmp_path, schedule="cosine",
+                                                 warmup_steps=1, min_lr_ratio=0.1)))
+    train(cfg_path)
+    lines = [json.loads(l) for l in (tmp_path / "runs" / "metrics.jsonl").read_text().splitlines()]
+    lrs = [l["lr"] for l in lines]
+    assert lrs[0] > lrs[1] > lrs[2]
+    assert abs(lrs[-1] - 1e-4) < 1e-9  # base 1e-3 × floor 0.1 at the last step
+
+
+def test_validation_loss_picks_the_best_checkpoint(tiny_xview3, tmp_path, monkeypatch):
+    """With validate: true each epoch logs val_loss and stage1_best.pt is the epoch with the
+    lowest one — so a run that degrades late (Run 4) still leaves its best weights."""
+    from planetar_fusion import train as train_mod
+
+    vals = iter([0.9, 0.4, 0.7])
+    monkeypatch.setattr(train_mod, "evaluate_loss", lambda *a, **k: next(vals))
+    cfg_path = tmp_path / "cfg.yaml"
+    cfg_path.write_text(yaml.safe_dump(_tiny_cfg(tiny_xview3, tmp_path, validate=True)))
+    result = train_mod.train(cfg_path)
+    lines = [json.loads(l) for l in (tmp_path / "runs" / "metrics.jsonl").read_text().splitlines()]
+    assert [l["val_loss"] for l in lines] == [0.9, 0.4, 0.7]
+    best = torch.load(tmp_path / "ckpt" / "stage1_best.pt", weights_only=False)
+    assert best["epoch"] == 1 and best["val_loss"] == 0.4
+    assert result["best_ckpt"].endswith("stage1_best.pt") and result["best_epoch"] == 1
+
+
+def test_evaluate_loss_is_finite_and_leaves_the_model_unchanged(tiny_xview3):
+    from torch.utils.data import DataLoader
+
+    from planetar_fusion.data import XView3Dataset
+    from planetar_fusion.model import CenterNetSAR
+    from planetar_fusion.train import evaluate_loss
+
+    root, labels, _ = tiny_xview3
+    ds = XView3Dataset(root, labels, ["VH_dB", "VV_dB", "bathymetry", "owiMask", "owiWindSpeed"], 64, 32)
+    model = CenterNetSAR(5, base=8)
+    model.train()
+    before = _state(model)
+    v = evaluate_loss(model, DataLoader(ds, batch_size=2, collate_fn=collate), "cpu", use_amp=False)
+    assert v > 0 and torch.isfinite(torch.tensor(v))
+    assert all(torch.equal(before[k], model.state_dict()[k]) for k in before)  # BN stats untouched
+    assert model.training  # restored to train mode

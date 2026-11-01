@@ -3,11 +3,14 @@
     python -m planetar_fusion.train --config configs/stage1.yaml
 
 Writes checkpoints/stage1_ep<N>.pt per epoch and appends one JSON line per
-epoch to runs/metrics.jsonl. `collate` produces the batched target contract
+epoch to runs/metrics.jsonl. `train.schedule: cosine` warms the LR up over `warmup_steps`
+and cosine-decays it to `min_lr_ratio` × lr; `train.validate: true` scores the loss on the
+`val_labels` tiles each epoch and keeps the lowest as stage1_best.pt. `collate` produces the batched target contract
 losses.detector_loss expects (heatmap stacked, attributes as per-sample lists).
 """
 import argparse
 import json
+import math
 from pathlib import Path
 
 import torch
@@ -78,6 +81,42 @@ def make_optimizer(model, t):
                               {"params": rest, "weight_decay": 0.0}], lr=t["lr"])
 
 
+def lr_factor(step, total, warmup, min_ratio):
+    """LR multiplier after `step` optimiser steps: linear warm-up to 1 over `warmup` steps,
+    then cosine decay to `min_ratio` at `total`. Run 4's constant LR destabilised late."""
+    if step < warmup:
+        return (step + 1) / warmup
+    p = min(1.0, (step - warmup + 1) / max(1, total - warmup + 1))
+    return min_ratio + (1 - min_ratio) * 0.5 * (1 + math.cos(math.pi * p))
+
+
+def make_scheduler(opt, t, total_steps):
+    if t.get("schedule", "constant") == "constant":
+        return torch.optim.lr_scheduler.LambdaLR(opt, lambda s: 1.0)
+    warmup, floor = int(t.get("warmup_steps", 0)), float(t.get("min_lr_ratio", 0.0))
+    return torch.optim.lr_scheduler.LambdaLR(opt, lambda s: lr_factor(s, total_steps, warmup, floor))
+
+
+def evaluate_loss(model, dl, dev, use_amp):
+    """Mean detector loss over `dl` in eval mode (BatchNorm stats untouched); non-finite
+    batches are left out. Restores the model's train/eval mode."""
+    was_training = model.training
+    model.eval()
+    tot, n = 0.0, 0
+    with torch.no_grad():
+        for imgs, tgt in dl:
+            imgs = imgs.to(dev)
+            tgt["heatmap"] = tgt["heatmap"].to(dev)
+            for k in LIST_KEYS:
+                tgt[k] = [x.to(dev) for x in tgt[k]]
+            with torch.autocast("cuda", enabled=use_amp):
+                loss, _ = detector_loss(model(imgs), tgt)
+            if torch.isfinite(loss):
+                tot, n = tot + loss.item(), n + 1
+    model.train(was_training)
+    return tot / max(1, n)
+
+
 def load_config(path):
     with open(path) as f:
         return yaml.safe_load(f)
@@ -92,12 +131,18 @@ def train(config_path):
                     num_workers=t["num_workers"], collate_fn=collate)
     model = CenterNetSAR(len(d["channels"]), base=cfg.get("model", {}).get("base", 32)).to(dev)
     opt = make_optimizer(model, t)
+    sched = make_scheduler(opt, t, t["epochs"] * len(dl))
+    val_dl = None
+    if t.get("validate"):
+        val_ds = XView3Dataset(d["root"], d["val_labels"], d["channels"], d["tile"], d["stride"])
+        val_dl = DataLoader(val_ds, batch_size=t["batch_size"], shuffle=False,
+                            num_workers=t["num_workers"], collate_fn=collate)
     use_amp = bool(t.get("amp")) and dev == "cuda"
     scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
     ckpt_dir, run_dir = Path(o["ckpt_dir"]), Path(o["run_dir"])
     ckpt_dir.mkdir(parents=True, exist_ok=True)
     run_dir.mkdir(parents=True, exist_ok=True)
-    last = None
+    last, best, best_val, best_ep = None, None, math.inf, None
     with open(run_dir / "metrics.jsonl", "a") as log:
         for ep in range(t["epochs"]):
             model.train()
@@ -112,15 +157,26 @@ def train(config_path):
                     skipped += 1
                 else:
                     tot, done = tot + loss, done + 1
+                sched.step()  # keyed on the iteration, so skipped batches still advance it
             bad = [n for n, v in model.state_dict().items() if not _finite(v)]
             if bad:
                 raise RuntimeError(f"model went non-finite in epoch {ep} ({len(bad)} tensors, e.g. {bad[0]})")
-            rec = {"epoch": ep, "train_loss": tot / max(1, done), "skipped_batches": skipped}
+            rec = {"epoch": ep, "train_loss": tot / max(1, done), "skipped_batches": skipped,
+                   "lr": opt.param_groups[0]["lr"]}
+            if val_dl is not None:
+                rec["val_loss"] = evaluate_loss(model, val_dl, dev, use_amp)
             log.write(json.dumps(rec) + "\n")
             log.flush()
+            state = {"model": model.state_dict(), "config": cfg, "epoch": ep}
             last = ckpt_dir / f"stage1_ep{ep}.pt"
-            torch.save({"model": model.state_dict(), "config": cfg, "epoch": ep}, last)
-    return {"epochs": t["epochs"], "last_ckpt": str(last), "device": dev}
+            torch.save(state, last)
+            if val_dl is not None and rec["val_loss"] < best_val:
+                best_val, best_ep, best = rec["val_loss"], ep, ckpt_dir / "stage1_best.pt"
+                torch.save({**state, "val_loss": best_val}, best)
+    r = {"epochs": t["epochs"], "last_ckpt": str(last), "device": dev}
+    if best is not None:
+        r.update(best_ckpt=str(best), best_epoch=best_ep)
+    return r
 
 
 def main():

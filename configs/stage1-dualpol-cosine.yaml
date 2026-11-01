@@ -1,0 +1,31 @@
+# Run 5: configs/stage1-dualpol.yaml (VH + VV) plus the two fixes Run 4 asked for. Run 4's
+# constant LR 3e-4 let train loss creep up from epoch 2 and destabilised after epoch 8; here
+# the LR warms up over 1,000 steps and cosine-decays to 5% by the last step, and the holdout
+# loss is scored each epoch so stage1_best.pt survives a late collapse. Selecting on the
+# holdout loss makes its holdout score slightly optimistic (as picking the threshold there is).
+# xView3 is CC BY-NC-SA: these weights are demo/benchmark only (DESIGN §3), never shipped.
+data:
+  root: data/xview3
+  train_labels: data/xview3/split/train.csv
+  val_labels: data/xview3/split/holdout.csv
+  channels: [VH_dB, VV_dB]
+  tile: 800
+  stride: 704
+model:
+  base: 32
+train:
+  epochs: 10
+  batch_size: 2
+  lr: 0.0003
+  schedule: cosine
+  warmup_steps: 1000
+  min_lr_ratio: 0.05
+  validate: true
+  weight_decay: 0.05   # on conv weights; see train.make_optimizer
+  num_workers: 4
+  device: cuda
+  amp: true
+  max_grad_norm: 5.0   # clip; see train.train_step
+out:
+  ckpt_dir: checkpoints/stage1-dualpol-cosine
+  run_dir: runs/stage1-dualpol-cosine
