@@ -6,7 +6,7 @@ SAR↔AIS association from AIS-on co-occurrence (free labels) and applies it to 
 (`../planetar/docs/recenter-learned-fusion.md`); this repo makes the core idea real on the two
 modalities we actually run — Sentinel-1 SAR + AIS — then stages the rest.
 
-> **Status (2026-10-29): Stage 1 built and tested; xView3 validation data in place. Best holdout aggregate 0.253 (Run 3, 5-channel, epoch 3, thresh 0.15). The dual-pol (VH+VV) model `planetar-sat` can run peaks at 0.189 (Run 4, epoch 7, thresh 0.25); its 12-epoch constant-LR run destabilised after epoch 8. Task 9 works end to end on a real Sentinel-1C scene. Next: an LR schedule + best-checkpoint selection, then the dark-vessel step.** Design: [`docs/DESIGN.md`](docs/DESIGN.md). Plan: [`docs/plans/2026-07-26-stage1-xview3-detector.md`](docs/plans/2026-07-26-stage1-xview3-detector.md).
+> **Status (2026-11-01): Stage 1 built and tested; xView3 validation data in place. Best holdout aggregate 0.253 (Run 3, 5-channel, epoch 3, thresh 0.15). The dual-pol (VH+VV) model `planetar-sat` can run reaches 0.213 (Run 5, cosine LR, epoch 7, thresh 0.1; Run 4's constant LR peaked at 0.189 and destabilised after epoch 8). Task 9 works end to end on a real Sentinel-1C scene. Next: switch `planetar-sat` to the Run 5 checkpoint, then the dark-vessel step.** Design: [`docs/DESIGN.md`](docs/DESIGN.md). Plan: [`docs/plans/2026-07-26-stage1-xview3-detector.md`](docs/plans/2026-07-26-stage1-xview3-detector.md).
 
 ## The v0, in two stages (single GPU throughout)
 
@@ -39,7 +39,7 @@ modalities we actually run — Sentinel-1 SAR + AIS — then stages the rest.
 | **SAR re-tile (2026-10-27)** | ✅ xView3 ships VH/VV as uncompressed one-row strips, so each 800-px tile read pulled ~92 MB per channel and the loader was disk-bound. `scripts/retile_xview3.py data/xview3` rewrites them in place as 512×512 tiles (lossless, verified per file). Run it after any fresh download |
 | **Task 8 — RunPod run + real `MR`** | ❌ Not started; needs a credit top-up (full run ≈ $11–15 on a Secure 4090) |
 | **Run 4 — dual-pol (2026-10-28)** | ⚠️ `configs/stage1-dualpol.yaml` (VH+VV only, 12 epochs, wd 0.05, constant LR 3e-4). Stable to epoch 8, then skipped batches 125 → 1,469 → 2,584 → 9,259 and length accuracy collapsed; ep11 scores 0.102 at best. Best checkpoint **epoch 7: 0.189 at thresh 0.25**. Results below |
-| **Run 5 — dual-pol, cosine LR (2026-10-31)** | ⏳ `configs/stage1-dualpol-cosine.yaml`: Run 4 plus 1,000-step warm-up, cosine decay to 5%, per-epoch holdout loss → `stage1_best.pt` (c536dbf). 10 epochs, ~1.7 h each on bb's 2070; log `runs/stage1-dualpol-cosine/` |
+| **Run 5 — dual-pol, cosine LR (2026-10-31)** | ✅ `configs/stage1-dualpol-cosine.yaml`: Run 4 plus 1,000-step warm-up, cosine decay to 5%, per-epoch holdout loss → `stage1_best.pt` (c536dbf). Stable all 10 epochs (skipped batches 29–135, no late collapse). Lowest holdout loss at epoch 7 (`stage1_best.pt`): **0.213 at thresh 0.1**, the best dual-pol score (Run 4: 0.189). Results below |
 | **Task 9 — `planetar-sat --detector learned`** | ✅ 2026-10-28/29, `planetar-sat` branch `learned-detector`. Uses the **dual-pol** model (VH+VV, both in every CDSE 1SDV GRD), not VV-only. DN → 20·log10 dB, staged as tiled rasters; geocoded with the annotation grid. On the S1C 2026-05-08 scene (radar geometry, no CRS), ep7 at 0.25 gave 36 sea detections vs CFAR's 4,275; all 36 sit within 200 m of a CFAR detection (median 17 m, median CFAR SNR 21), covering 18 of CFAR's 50 detections above SNR 20. No AIS for that date, so neither side is ground-truthed. `runs/demo/` |
 
 Holdout scores, Run 3 (10 scenes, `bench score`, thresh 0.3, with shoreline; `runs/stage1-2070-wd/`):
@@ -83,6 +83,19 @@ Run 4 (dual-pol) threshold sweeps, aggregate per checkpoint (`runs/stage1-dualpo
 Epoch 7 at 0.25: loc F1 0.452, shore 0.023, vessel 0.727, fishing 0, length acc 0.337, 1,400
 preds. Dual-pol trails the 5-channel Run 3 (0.253) — the ancillary channels (wind, bathymetry)
 help — but it is the model a raw GRD scene can feed.
+
+Run 5 (dual-pol, cosine LR) threshold sweeps (`runs/stage1-dualpol-cosine/sweep-<ckpt>/sweep.json`):
+
+| thresh | 0.05 | 0.1 | 0.15 | 0.2 | 0.25 | 0.3 | 0.4 |
+|---|---|---|---|---|---|---|---|
+| best (epoch 7) | 0.185 | **0.213** | 0.199 | 0.165 | 0.110 | 0.061 | 0.007 |
+| epoch 9 (last) | 0.180 | 0.209 | 0.187 | 0.131 | 0.073 | 0.032 | 0.002 |
+
+Best at 0.1: loc F1 0.558, shore 0.044, vessel 0.718, fishing 0, length acc 0.151, 1,675 preds.
+Location F1 rose from 0.452 to 0.558 over Run 4's best; length accuracy fell (0.337 → 0.151),
+and fishing F1 is still 0. Epoch 7 was picked on holdout loss and the threshold on the holdout
+score, so 0.213 is slightly optimistic. The scores sit lower than Run 4's (best threshold 0.1
+vs 0.25): `planetar-sat --detector learned` needs its threshold changed with the checkpoint.
 
 Run 1 (pre-fix, `runs/stage1-2070-prefix/`), for reference: ep0 0.101, ep1 0.136, ep2 0.002, ep3 0
 (NaN BatchNorm stats).
