@@ -6,7 +6,7 @@ SAR↔AIS association from AIS-on co-occurrence (free labels) and applies it to 
 (`../planetar/docs/recenter-learned-fusion.md`); this repo makes the core idea real on the two
 modalities we actually run — Sentinel-1 SAR + AIS — then stages the rest.
 
-> **Status (2026-11-01): Stage 1 built and tested; xView3 validation data in place. Best holdout aggregate 0.253 (Run 3, 5-channel, epoch 3, thresh 0.15). The dual-pol (VH+VV) model `planetar-sat` can run reaches 0.213 (Run 5, cosine LR, epoch 7, thresh 0.1; Run 4's constant LR peaked at 0.189 and destabilised after epoch 8). Task 9 works end to end on a real Sentinel-1C scene. Next: switch `planetar-sat` to the Run 5 checkpoint, then the dark-vessel step.** Design: [`docs/DESIGN.md`](docs/DESIGN.md). Plan: [`docs/plans/2026-07-26-stage1-xview3-detector.md`](docs/plans/2026-07-26-stage1-xview3-detector.md).
+> **Status (2026-11-02): Stage 1 built and tested; xView3 validation data in place. Best holdout aggregate 0.253 (Run 3, 5-channel, epoch 3, thresh 0.15). The dual-pol (VH+VV) model `planetar-sat` can run reaches 0.213 (Run 5, cosine LR, epoch 7, thresh 0.1; Run 4's constant LR peaked at 0.189 and destabilised after epoch 8). Task 9 works end to end on a real Sentinel-1C scene. `planetar-sat` now defaults to Run 5's threshold. The Stage 2 proximity baseline (`associate.py`, below) is built; it waits on the first Sentinel-1 pass over Victoria with AIS recorded (~2026-11-11 02:10 UTC; the 2026-10-30 pass predates the recording).** Design: [`docs/DESIGN.md`](docs/DESIGN.md). Plan: [`docs/plans/2026-07-26-stage1-xview3-detector.md`](docs/plans/2026-07-26-stage1-xview3-detector.md).
 
 ## The v0, in two stages (single GPU throughout)
 
@@ -105,6 +105,27 @@ uv venv --python 3.11 .venv && uv pip install --python .venv/bin/python -e ".[de
 git submodule update --init
 .venv/bin/pytest -q
 ```
+
+## Stage 2 proximity baseline (dark-vessel step)
+
+`src/planetar_fusion/associate.py` (no torch) matches `planetar-sat detect` output to the
+`planetar-ais` recordings. Each AIS vessel is placed at the SAR instant (interpolated between
+fixes ≤ 15 min apart, else dead-reckoned ≤ 10 min from the nearest fix; fix times use the AIS
+UTC second, not aisstream's receipt time). Detections and vessels are then assigned
+one-to-one (Hungarian) inside max(500 m, 3σ). Output rows are `matched`, `dark` (no AIS in
+reach: the candidate list), or `unseen` (AIS inside the footprint, not detected). The
+DESIGN.md §4.4 AIS-blinding check is printed with them.
+
+```
+.venv/bin/python -m planetar_fusion.associate --dets dets.jsonl \
+    --ais ../planetar-ais/data/ais/ais-<day>.jsonl ../planetar-ais/data/ais-orca/ais-<day>.jsonl \
+    --annotation <vv annotation .xml> --out assoc.jsonl
+```
+
+A sanity check on real traffic (2026-11-02, every AIS vessel placed as a detection with 100 m
+noise): all matched. With each vessel's AIS hidden in turn, 84–96% came back dark; the rest
+were handed to a neighbour (2 of 49 at 02:10 UTC, 17 of 107 at 19:10 UTC), mostly in harbours.
+Those are the cases the learned head is for.
 
 ## What's coming (Stage 1 build)
 
